@@ -1,0 +1,24 @@
+# Dependencias
+node_modules/
+
+# Vercel
+.vercel/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Artefactos de fabricación generados (no versionar binarios pesados)
+*.stl
+*.step
+*.stp
+out/
