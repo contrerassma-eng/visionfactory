@@ -78,7 +78,10 @@
       <label>Horizontal <input type="range" id="c_ox" min="-3" max="3" step="0.01" value="0"></label>
       <label>Alto <input type="range" id="c_oy" min="-3" max="3" step="0.01" value="0"></label>
       <label>Profundidad <input type="range" id="c_oz" min="-3" max="3" step="0.01" value="0"></label>
-      <label>Varillas <input type="range" id="c_clip" min="0" max="3" step="0.01" value="0.35"></label>
+      <label>Varillas <input type="range" id="c_clip" min="0" max="3" step="0.01" value="3"></label>
+      <label>Ocultar tras cabeza <input type="checkbox" id="c_occ" checked></label>
+      <label>Cabeza tamaño <input type="range" id="c_osz" min="0.5" max="2" step="0.01" value="1"></label>
+      <label>Cabeza prof. <input type="range" id="c_odz" min="0" max="1.5" step="0.01" value="0.7"></label>
     </div>
   </div>
 
@@ -221,7 +224,7 @@ const cadModel = new THREE.Group();
 const cadHolder = new THREE.Group();
 cadModel.add(cadHolder);
 let cadMesh = null, cadBaseScale = 1;
-const cadCal = { scale: 1, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: 0, oz: 0, clip: 0.35 };
+const cadCal = { scale: 1, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: 0, oz: 0, clip: 3 };
 function applyCal() {
   cadHolder.rotation.set(THREE.MathUtils.degToRad(cadCal.rx), THREE.MathUtils.degToRad(cadCal.ry), THREE.MathUtils.degToRad(cadCal.rz));
   const s = cadBaseScale * cadCal.scale;
@@ -244,6 +247,18 @@ const bindCal = (id, key) => {
   el.addEventListener("input", () => { cadCal[key] = parseFloat(el.value); applyCal(); });
 };
 ["c_scale:scale", "c_sy:sy", "c_rx:rx", "c_ry:ry", "c_rz:rz", "c_ox:ox", "c_oy:oy", "c_oz:oz", "c_clip:clip"].forEach((p) => { const [id, k] = p.split(":"); bindCal(id, k); });
+
+// ---- Oclusor de cabeza (escribe profundidad, no color): oculta lo que pasa por
+// detrás de la cabeza, para que las varillas se metan tras la oreja en vez de
+// cruzar el rostro. Es la técnica que usan los probadores realistas. ----
+const occluder = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.MeshBasicMaterial({ colorWrite: false }));
+occluder.renderOrder = -1;
+occluder.visible = false;
+scene.add(occluder);
+const occCal = { on: true, size: 1, dz: 0.7 };
+document.getElementById("c_occ").addEventListener("change", (e) => { occCal.on = e.target.checked; });
+document.getElementById("c_osz").addEventListener("input", (e) => { occCal.size = parseFloat(e.target.value); });
+document.getElementById("c_odz").addEventListener("input", (e) => { occCal.dz = parseFloat(e.target.value); });
 
 const cache = {};
 function getGlasses(style) {
@@ -310,10 +325,17 @@ function onResults(results) {
     glasses.visible = true;
     // recorta lo que queda detrás del frente (oculta varillas sobre el rostro)
     clipPlane.setFromNormalAndCoplanarPoint(fwd, center.clone().addScaledVector(fwd, -cadCal.clip * ipd));
+    // oclusor de cabeza: elipsoide tras los ojos que tapa las varillas por detrás
+    const faceW = P(lm, FACE_R).distanceTo(P(lm, FACE_L));
+    occluder.visible = occCal.on;
+    occluder.position.copy(center).addScaledVector(fwd, -occCal.dz * faceW);
+    occluder.quaternion.copy(glasses.quaternion);
+    occluder.scale.set(faceW * 0.55 * occCal.size, faceW * 0.72 * occCal.size, faceW * 0.6 * occCal.size);
     updateMeasurements(lm);
     setStatus("Rostro detectado", "ok");
   } else {
     glasses.visible = false;
+    occluder.visible = false;
     setStatus("Buscando rostro…", "warn");
   }
   renderer.render(scene, camera);
