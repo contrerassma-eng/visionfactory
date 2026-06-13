@@ -19,6 +19,10 @@ es **exacto**, no una conversión de malla con pérdida.
 - `medidas.mjs` — landmarks de FaceMesh → medidas en mm (DP, anchos) usando el iris
   como escala; `paramsFromMeasurements()` las mapea a parámetros de montura.
 - `frame-desde-rostro.mjs` — cadena completa: landmarks → medidas → STEP/STL ajustado.
+- `estilos.mjs` — familias de estilo (rectangular, redonda, ovalada, cat-eye,
+  aviador) como aperturas paramétricas; `buildFrameWithStyle()` arma la montura.
+- `catalogo.mjs` — genera todos los estilos para unas mismas medidas y exporta
+  STEP/STL por estilo.
 
 ## Correr
 
@@ -28,6 +32,7 @@ npm install replicad replicad-opencascadejs
 node frame.mjs               # demo con parámetros fijos
 node medidas.mjs             # medidas desde landmarks (datos sintéticos)
 node frame-desde-rostro.mjs  # cadena completa: rostro → STEP ajustado al rostro
+node catalogo.mjs            # catálogo completo de estilos → STEP/STL
 ```
 
 Los `*.step` (fabricación/CNC) y `*.stl` (impresión 3D) quedan en esta carpeta (no
