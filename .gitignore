@@ -22,3 +22,6 @@ npm-debug.log*
 *.step
 *.stp
 out/
+
+# Excepción: modelos servidos por el sitio web sí se versionan
+!site/models/*.stl
