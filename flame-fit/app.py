@@ -1,21 +1,23 @@
 """
 VisionFactory — servicio de medición / ajuste a medida (POC, I+D).
 
-Dos niveles:
-  /measure  -> medidas faciales en mm desde landmarks (iris como escala). FUNCIONA YA.
-  /fit      -> ajuste FLAME (malla de cabeza completa + forma) desde foto. Requiere
-               pesos con licencia NO comercial (ver README). Stub por ahora.
+  /measure       -> landmarks (478, MediaPipe) -> medidas en mm. Sin licencia.
+  /measure-mesh  -> sube una malla FLAME (.obj de MICA/DECA) -> medidas en mm + bbox.
+  /fit           -> foto -> FLAME (pipeline MICA). Requiere pesos con licencia
+                    NO comercial que descarga el usuario (ver README).
 
 Ejecutar:  uvicorn app:app --reload
 """
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-app = FastAPI(title="VisionFactory Fit", version="0.1.0")
+app = FastAPI(title="VisionFactory Fit", version="0.2.0")
 
 HVID_MM = 11.7  # diámetro horizontal del iris: patrón de escala poblacional
 
@@ -83,22 +85,32 @@ def measure(req: MeasureReq):
     }
 
 
+@app.post("/measure-mesh")
+async def measure_mesh(file: UploadFile = File(...)):
+    """Sube una malla FLAME (.obj/.ply de MICA/DECA) y devuelve medidas en mm."""
+    from adapter import load_mesh, measurements_mm  # import perezoso (trimesh)
+
+    suffix = os.path.splitext(file.filename or "mesh.obj")[1] or ".obj"
+    data = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(data)
+        path = f.name
+    try:
+        mesh = load_mesh(path)
+        return measurements_mm(mesh.vertices)
+    finally:
+        os.unlink(path)
+
+
 @app.post("/fit")
 def fit():
-    """Ajuste FLAME desde imagen -> malla de cabeza + forma + medidas precisas.
+    """Foto -> FLAME. Recomendado: correr MICA offline (ver README) y luego usar
+    /measure-mesh con la malla resultante.
 
-    Pipeline previsto:
-      1. Detección/recorte de cara.
-      2. Regresor (MICA para identidad/forma, DECA/EMOCA para expresión/detalle)
-         -> parámetros FLAME.
-      3. FLAME -> malla 5023 vértices (cabeza completa, con orejas).
-      4. Derivar medidas (DP, sien-a-sien, posición de oreja, puente) + exportar
-         malla como oclusor por persona.
-
-    Bloqueado: los pesos de FLAME/MICA/DECA son de licencia NO comercial y deben
-    descargarse tras registro en https://flame.is.tue.mpg.de (ver README).
+    Bloqueado aquí: MICA/FLAME requieren pesos con licencia NO comercial que se
+    descargan tras registro en https://flame.is.tue.mpg.de.
     """
     raise HTTPException(
         501,
-        "Ajuste FLAME no implementado: faltan pesos con licencia (ver README).",
+        "Usa MICA offline para foto->FLAME (ver README) y luego /measure-mesh.",
     )

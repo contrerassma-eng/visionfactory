@@ -1,10 +1,11 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2
+python-multipart>=0.0.9
 numpy>=1.26
+trimesh>=4.0
 
-# --- Opcional, solo para /fit con FLAME (licencia NO comercial; ver README) ---
+# --- Opcional: foto -> FLAME con MICA/DECA (licencia NO comercial; ver README) ---
 # torch
-# trimesh
-# Los pesos de FLAME y los regresores (MICA / DECA / EMOCA) requieren registro
-# y aceptar la licencia de investigación en https://flame.is.tue.mpg.de
+# Los pesos de FLAME + MICA/DECA requieren registro y aceptar la licencia de
+# investigación en https://flame.is.tue.mpg.de (la gestión de licencia es del usuario).

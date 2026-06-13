@@ -1,42 +1,52 @@
 # flame-fit — medición y ajuste a medida (I+D)
 
-Servicio para **extraer datos visuales del rostro del cliente** (con su
-consentimiento) y derivar medidas para fabricar monturas a medida. Dos niveles:
+Extraer datos del rostro del cliente (con su consentimiento) → medidas para
+fabricar monturas a medida y un **oclusor de cabeza por persona** (arregla las
+orejas/varillas en el probador).
 
 | Endpoint | Qué hace | Estado |
 |---|---|---|
-| `POST /measure` | Landmarks (478, MediaPipe) → medidas en mm (DP, ancho facial, puente, alto) usando el iris como escala | ✅ Funciona, sin licencia |
-| `POST /fit` | Foto → ajuste **FLAME** → malla de cabeza completa (orejas) + forma + medidas + oclusor por persona | ⛔ Stub (pesos con licencia) |
+| `POST /measure` | Landmarks (478) → medidas en mm (DP, ancho facial, puente, alto) | ✅ Sin licencia |
+| `POST /measure-mesh` | Sube malla FLAME (`.obj` de MICA) → medidas mm + dims de cabeza | ✅ Sin licencia (corre con `adapter.py`) |
+| `POST /fit` | Foto → FLAME directo | ⛔ Usar MICA offline (abajo) |
 
-> El probador web ya hace la medición `/measure` en el navegador y exporta JSON
-> ("Medir → JSON"). Este servicio replica ese cálculo del lado servidor y deja
-> preparado el camino FLAME para el modelo de cabeza completo.
-
-## Correr
+## Correr el servicio
 
 ```bash
 cd flame-fit
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app:app --reload
-# POST /measure con { image_width, image_height, landmarks:[{x,y,z}...] }
+python adapter.py        # demo: corre el adapter con una malla sintética
 ```
 
-## Camino FLAME (`/fit`) — pendiente y OJO con la licencia
+## Pipeline FLAME recomendado (foto → cabeza 3D métrica)
 
-Pipeline previsto: detección de cara → regresor (**MICA** identidad/forma +
-**DECA/EMOCA** expresión/detalle) → parámetros **FLAME** → malla de 5023 vértices
-(cabeza completa, con orejas) → medidas precisas + oclusor por persona.
+El camino que **sí funciona** es usar **MICA** (reconstrucción FLAME métrica, en mm
+reales — ideal para medir), offline, y luego pasar su malla por nuestro adapter:
 
-⚠️ **Licencia:** FLAME y sus regresores (MICA, DECA, EMOCA) se distribuyen bajo
-**licencia de investigación NO comercial**. Para un producto comercial hay que:
-- registrarse y aceptar la licencia en <https://flame.is.tue.mpg.de> para evaluar, y
-- **gestionar una licencia comercial** con Max Planck (MPI-IS), **o** usar una
-  alternativa con licencia comercial / construir un modelo propio.
+1. Clonar MICA: <https://github.com/Zielon/MICA> (código abierto).
+2. **Descargar los pesos** (FLAME `generic_model.pkl` + pesos MICA) tras registrarte
+   y **aceptar la licencia** en <https://flame.is.tue.mpg.de>.
+   > ⚠️ Licencia **NO comercial**. La gestión/licencia comercial es responsabilidad
+   > del usuario (así acordado). Yo no descargo ni incluyo esos pesos aquí.
+3. Correr MICA sobre una foto → te da una **malla FLAME** (`.obj`/`.ply`, 5023
+   vértices, escala métrica).
+4. Pasar esa malla por `adapter.py` o `POST /measure-mesh` → **medidas en mm** +
+   exportar **oclusor** (`export_occluder`) para usar en el probador.
 
-Por eso este repo deja el endpoint como stub: no incluyo pesos ni los descargo.
+Alternativa: **DECA/EMOCA** (similar; DECA no es métrico, hay que escalar con la DP).
 
-## Privacidad (datos de rostro = datos sensibles)
-La cara/medidas son **datos personales** (en salud, sensibles). Recolectar solo
-con **consentimiento explícito**, minimizar lo almacenado, y cumplir la Ley 19.628
-/ Ley 21.719 (ver `docs/roadmap.md`).
+## Conectar con el probador
+- Las **medidas** alimentan el generador paramétrico (curvas/ángulos a medida).
+- El **oclusor** (malla de cabeza simplificada) reemplaza el elipsoide actual →
+  las varillas se ocultan exactamente tras *esa* oreja.
+
+## Pendiente al integrar
+- Fijar en `adapter.FLAME_IDX` los índices de vértices FLAME (pupilas, sienes,
+  orejas) desde el landmark embedding de FLAME para las medidas por-punto.
+- (Opcional) ajuste FLAME desde landmarks sin redes, usando solo `generic_model.pkl`.
+
+## Privacidad
+Cara/medidas = **datos personales sensibles**. Recolectar solo con consentimiento
+explícito; minimizar almacenamiento. Ver `../docs/roadmap.md` (Ley 19.628 / 21.719).
