@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import trimesh
 
-MM = 1000.0  # MICA/FLAME en metros -> mm
+MM = 1.0  # MICA exporta la malla en mm (verificado con malla real)
 
 # Índices de vértices FLAME (topología fija de 5023). Deben fijarse desde el
 # landmark embedding de FLAME que descargues bajo licencia. Mientras estén vacíos,

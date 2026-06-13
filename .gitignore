@@ -29,3 +29,6 @@ out/
 # Python
 __pycache__/
 *.pyc
+
+# Mallas de cabeza (dato biométrico, no versionar)
+*.ply
