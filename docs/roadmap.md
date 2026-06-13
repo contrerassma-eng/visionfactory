@@ -46,14 +46,42 @@ El probador ya corre MediaPipe FaceMesh con `refine_landmarks` (iris 468 izq /
 
 ### 2.2 Generación paramétrica de monturas
 
-- **Stack recomendado: CadQuery** (Python, sobre OpenCASCADE). Genera geometría
-  paramétrica desde las medidas y exporta **STEP** (B-rep, ideal para CAD/CNC y
-  para "entregarte a ti mismo el archivo de fabricación") y **STL** (impresión).
-- Alternativa moderna: `build123d` (también OpenCASCADE, exporta STEP). OpenSCAD
-  queda fuera porque solo exporta STL (sin STEP).
+> **Decisión (13-jun): trabajamos en el mundo web/Three.js, no CadQuery.**
+
+El punto fino que preguntaste: **modelar en Three.js "crudo" y después pasar a
+STEP SÍ es un problema.** Three.js trabaja con *mallas* (triángulos); STEP es
+*B-rep* (superficies matemáticas exactas con topología). Convertir malla→STEP da
+uno de dos resultados malos: (a) un STEP "facetado" donde cada triángulo es una
+cara plana — válido pero enorme y pésimo para CNC; o (b) un re-ajuste de
+superficies (NURBS) que es con pérdida y necesita software especializado (Fusion,
+Geomagic).
+
+La salida elegante: **no autorees la geometría de fabricación como malla.** Usa un
+núcleo B-rep que *además* renderice con Three.js:
+
+- **Replicad** (elegido): librería JS/TS de CAD paramétrico sobre OpenCASCADE (el
+  mismo kernel que usa CadQuery), pero **en el navegador y en Node**. Modelas por
+  código, **previsualizas con Three.js** (Replicad teselado a malla) y **exportas
+  STEP real + STL** sin conversión con pérdida. Te quedas en tu mundo web y
+  obtienes STEP exacto.
+- Alternativa de más bajo nivel: **opencascade.js** (OCCT en WASM) directo.
+
+Sobre "Three.js es más preciso": para *modelar visualmente* se siente más directo,
+pero la malla es una *aproximación*; el B-rep es exacto. Con Replicad mantienes la
+sensación Three.js y ganas la precisión de fabricación.
+
+**¿Y si solo imprimo en 3D?** Entonces puede que **no necesites STEP**: para
+impresión el formato nativo es **STL/3MF**, que se exporta directo desde la malla.
+STEP solo es imprescindible si vas a **fresar** (acetato/CNC) o intercambiar con un
+CAD formal. La viseladora **no** usa STEP: usa el contorno 2D del lente en formato
+**OMA/VCA**, que sale fácil de cualquiera de las dos representaciones.
+
 - **Biblioteca de estilos propios**: 3–5 familias parametrizadas (redonda,
   rectangular, cat-eye, browline, aviador). Son *categorías de estilo* (no
   protegibles) con diseño propio, ajustadas por las medidas del cliente.
+- **POC funcional**: `generador/` lleva landmarks → medidas en mm (iris como
+  escala) → parámetros → **STEP + STL** desde JavaScript (Node). Camino de extremo
+  a extremo probado (`frame-desde-rostro.mjs`).
 
 ### 2.3 Fabricación
 
@@ -147,10 +175,13 @@ propios diseños**. No lifteamos sus assets.
   base de datos propia conforme a ley.
 - **Fase 5 — Canales**: tienda directa + Mercado Libre (sol/sin Rx primero).
 
-## 8. Decisiones que necesito de ti
+## 8. Decisiones (estado al 13-jun)
 
-1. **El `probador-lentes.html`**: súbelo/pégalo para desbloquear el deploy.
-2. **Generación**: ¿confirmamos CadQuery (Python) como motor de STEP?
-3. **Viseladora**: ¿qué modelo evalúas comprar? (define el formato de datos real).
-4. **Material objetivo** de las monturas (define costo y proceso).
-5. **¿Partimos por gafas sin receta** (menos regulación) o vas directo a Rx?
+1. **El `probador-lentes.html`**: ⏳ pendiente — súbelo para desbloquear el deploy.
+2. **Motor de generación**: ✅ **Replicad** (CAD B-rep en navegador/Node, preview
+   Three.js, export STEP/STL). Descartado CadQuery.
+3. **Viseladora**: ⏳ ¿qué modelo evalúas comprar? Define el formato de datos real.
+4. **Producto inicial**: ✅ **gafas sin receta** (sol / filtro azul) — menos
+   fricción regulatoria para validar el negocio.
+5. **Rama `main`**: ✅ creada; PR de revisión abierto.
+6. **Material objetivo** de las monturas: ⏳ pendiente (define costo y proceso).

@@ -11,23 +11,34 @@ rostro de cada persona** y la entrega de archivos listos para fabricar (STEP/STL
 
 | Componente | Estado |
 |---|---|
-| Probador virtual (HTML) | ⏳ Falta subir el fuente como `probador-lentes/index.html` |
-| Config de despliegue Vercel | ✅ Listo en `probador-lentes/vercel.json` |
-| Pipeline 3D / fabricación | 📋 Diseñado en `docs/roadmap.md` |
+| Probador (try-on) | ✅ Versión funcional en `site/index.html` (cámara + FaceMesh + 5 estilos + DP en vivo) |
+| Deploy GitHub Pages | ✅ Workflow listo (`.github/workflows/pages.yml`); falta habilitar Pages |
+| Generador 3D (STEP/STL) | ✅ `generador/` — medición facial + 5 estilos paramétricos |
+| Deploy Vercel (alternativa) | ✅ `probador-lentes/vercel.json` (requiere tu HTML como `index.html`) |
+| Pipeline / negocio | 📋 `docs/roadmap.md` |
 
 ## Estructura
 
 ```
 visionfactory/
-├── probador-lentes/      # Sitio estático del probador (deploy a Vercel)
-│   ├── vercel.json       # Headers (Permissions-Policy: camera=self)
-│   └── index.html        # ← PENDIENTE: copiar aquí probador-lentes.html
-└── docs/
-    └── roadmap.md        # Arquitectura, pipeline de fabricación y límites legales
+├── site/                 # Probador (try-on) que se publica en GitHub Pages
+│   └── index.html        #   cámara + MediaPipe FaceMesh + 5 estilos + DP en vivo
+├── generador/            # Motor 3D: rostro → medidas → STEP/STL (Replicad)
+├── probador-lentes/      # Alternativa de deploy en Vercel (vercel.json)
+├── docs/roadmap.md       # Arquitectura, fabricación y límites legales
+└── .github/workflows/pages.yml   # Deploy automático a GitHub Pages
 ```
 
-## Próximo paso inmediato
+## Deploy en GitHub Pages
 
-El despliegue está **bloqueado** porque falta el HTML del probador. Instrucciones
-en `probador-lentes/README.md`. El resto del plan (medición, generación 3D,
-materiales, datos y cumplimiento) está en `docs/roadmap.md`.
+El workflow `.github/workflows/pages.yml` publica la carpeta `site/`. Para activarlo:
+
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions** (una vez).
+2. **Merge del PR #1 a `main`** (o ejecutar el workflow a mano desde la pestaña
+   Actions → *Deploy GitHub Pages* → *Run workflow*).
+
+Queda publicado en: `https://contrerassma-eng.github.io/visionfactory/`
+
+> El probador de `site/index.html` es una versión funcional propia (no usa diseños
+> de terceros). Si prefieres tu `probador-lentes.html`, reemplaza `site/index.html`
+> con él y se redespliega solo.

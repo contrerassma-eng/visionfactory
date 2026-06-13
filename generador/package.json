@@ -1,0 +1,14 @@
+{
+  "name": "visionfactory-generador",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "POC: generación paramétrica de monturas (Replicad -> STEP/STL)",
+  "scripts": {
+    "frame": "node frame.mjs"
+  },
+  "dependencies": {
+    "replicad": "^0.23.1",
+    "replicad-opencascadejs": "^0.23.0"
+  }
+}

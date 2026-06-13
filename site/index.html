@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>VisionFactory — Probador de lentes</title>
+<style>
+  :root { --bg:#0d0f14; --panel:#161a23; --line:#262c3a; --txt:#e7ecf5; --muted:#9aa6bd; --acc:#4f8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  header { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  header .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .stage { position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:14px; overflow:hidden; border:1px solid var(--line); }
+  #output { width:100%; height:100%; display:block; }
+  #status { position:absolute; top:10px; left:10px; font-size:12px; background:rgba(0,0,0,.55); border:1px solid var(--line); border-radius:999px; padding:4px 10px; }
+  #status.ok { color:#5ee29a; border-color:#1f5a3c; }
+  #status.warn { color:#ffd166; }
+  .controls { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; align-items:center; }
+  button, select { font:inherit; color:var(--txt); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  label { font-size:13px; color:var(--muted); }
+  .measure { margin-top:16px; display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card .v { font-size:22px; font-weight:700; }
+  .card .k { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  footer { color:var(--muted); font-size:12px; text-align:center; padding:18px; }
+  footer a { color:var(--acc); text-decoration:none; }
+  .note { font-size:12px; color:var(--muted); margin-top:10px; line-height:1.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VisionFactory</h1>
+  <span class="tag">Probador · ajuste a medida</span>
+</header>
+
+<main>
+  <div class="stage">
+    <video id="input" playsinline style="display:none"></video>
+    <canvas id="output"></canvas>
+    <div id="status" class="warn">Pulsa «Activar cámara»</div>
+  </div>
+
+  <div class="controls">
+    <button id="start" class="primary">Activar cámara</button>
+    <label for="style">Modelo</label>
+    <select id="style">
+      <option value="rectangular">Rectangular</option>
+      <option value="redonda">Redonda</option>
+      <option value="ovalada">Ovalada</option>
+      <option value="cat-eye">Cat-eye</option>
+      <option value="aviador">Aviador</option>
+    </select>
+    <button id="capture" disabled>Capturar PNG</button>
+  </div>
+
+  <div class="measure">
+    <div class="card"><div class="v" id="pd">—</div><div class="k">Distancia pupilar</div></div>
+    <div class="card"><div class="v" id="face">—</div><div class="k">Ancho facial</div></div>
+    <div class="card"><div class="v" id="lens">—</div><div class="k">Lente sugerido</div></div>
+  </div>
+
+  <p class="note">
+    Las medidas se estiman con el iris como patrón (~11.7&nbsp;mm). Son una
+    aproximación desde una cámara 2D; para fabricar se validan en un fitting real.
+    El procesamiento es 100% en tu dispositivo: el video no se sube a ningún lado.
+  </p>
+</main>
+
+<footer>
+  VisionFactory · <a href="https://github.com/contrerassma-eng/visionfactory" target="_blank" rel="noopener">repositorio</a>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
+<script>
+const video = document.getElementById('input');
+const canvas = document.getElementById('output');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('start');
+const captureBtn = document.getElementById('capture');
+const styleSel = document.getElementById('style');
+const HVID_MM = 11.7;
+
+// Índices MediaPipe FaceMesh (refine_landmarks).
+const IRIS_R = { c:468, ring:[469,470,471,472] };
+const IRIS_L = { c:473, ring:[474,475,476,477] };
+const FACE_R = 234, FACE_L = 454;
+
+function setStatus(text, cls){ statusEl.textContent = text; statusEl.className = cls || ''; }
+const dist = (a,b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
+
+const faceMesh = new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}` });
+faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+faceMesh.onResults(onResults);
+
+let camera = null;
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  setStatus('Iniciando cámara…', 'warn');
+  try {
+    camera = new Camera(video, {
+      onFrame: async () => { await faceMesh.send({ image: video }); },
+      width: 640, height: 480, facingMode: 'user'
+    });
+    await camera.start();
+    captureBtn.disabled = false;
+    setStatus('Buscando rostro…', 'warn');
+  } catch (e) {
+    setStatus('No se pudo acceder a la cámara', 'warn');
+    startBtn.disabled = false;
+  }
+});
+
+function onResults(results){
+  const w = results.image.width, h = results.image.height;
+  if (canvas.width !== w) { canvas.width = w; canvas.height = h; }
+
+  ctx.save();
+  ctx.clearRect(0,0,w,h);
+  ctx.translate(w,0); ctx.scale(-1,1);          // efecto espejo (selfie)
+  ctx.drawImage(results.image, 0, 0, w, h);
+
+  const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
+  if (lm) {
+    drawGlasses(lm, w, h, styleSel.value);
+    ctx.restore();                              // medidas fuera del espejo
+    updateMeasurements(lm, w, h);
+    setStatus('Rostro detectado', 'ok');
+  } else {
+    ctx.restore();
+    setStatus('Buscando rostro…', 'warn');
+  }
+}
+
+function px(lm, i, w, h){ return [lm[i].x*w, lm[i].y*h]; }
+
+function irisDiameterPx(lm, iris, w, h){
+  const c = px(lm, iris.c, w, h);
+  const m = iris.ring.reduce((s,i)=>s+dist(c, px(lm,i,w,h)),0)/iris.ring.length;
+  return m*2;
+}
+
+function updateMeasurements(lm, w, h){
+  const diaPx = (irisDiameterPx(lm,IRIS_R,w,h)+irisDiameterPx(lm,IRIS_L,w,h))/2;
+  const mmPerPx = HVID_MM/diaPx;
+  const pd = dist(px(lm,IRIS_R.c,w,h), px(lm,IRIS_L.c,w,h))*mmPerPx;
+  const face = dist(px(lm,FACE_R,w,h), px(lm,FACE_L,w,h))*mmPerPx;
+  const lens = (face - 18)/2 - 8;              // estimación de ancho de lente
+  document.getElementById('pd').textContent = pd.toFixed(1)+' mm';
+  document.getElementById('face').textContent = face.toFixed(0)+' mm';
+  document.getElementById('lens').textContent = Math.round(lens)+' mm';
+}
+
+function drawGlasses(lm, w, h, style){
+  const r = px(lm, IRIS_R.c, w, h);
+  const l = px(lm, IRIS_L.c, w, h);
+  const cx=(r[0]+l[0])/2, cy=(r[1]+l[1])/2;
+  const sep = dist(l, r);
+  const roll = Math.atan2(l[1]-r[1], l[0]-r[0]);
+  const lensW = sep*0.95, lensH = lensW*0.78;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(roll);
+  ctx.lineWidth = Math.max(2.5, lensW*0.06);
+  ctx.strokeStyle = '#101216';
+  ctx.fillStyle = 'rgba(20,24,32,0.18)';
+
+  drawLens(-sep/2, lensW, lensH, style, -1);
+  drawLens( sep/2, lensW, lensH, style,  1);
+
+  // puente
+  ctx.beginPath();
+  ctx.moveTo(-sep/2 + lensW/2 - 1, -lensH*0.12);
+  ctx.quadraticCurveTo(0, -lensH*0.02, sep/2 - lensW/2 + 1, -lensH*0.12);
+  ctx.stroke();
+
+  // varillas
+  ctx.beginPath();
+  ctx.moveTo(-sep/2 - lensW/2, -lensH*0.1); ctx.lineTo(-sep/2 - lensW/2 - lensW*0.55, -lensH*0.22);
+  ctx.moveTo( sep/2 + lensW/2, -lensH*0.1); ctx.lineTo( sep/2 + lensW/2 + lensW*0.55, -lensH*0.22);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Dibuja una apertura de lente centrada en (x0,0). s = lado externo (+1 / -1).
+function drawLens(x0, w, h, style, s){
+  ctx.save();
+  ctx.translate(x0, 0);
+  ctx.beginPath();
+  if (style === 'redonda') {
+    ctx.ellipse(0, 0, h/2, h/2, 0, 0, Math.PI*2);
+  } else if (style === 'ovalada') {
+    ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
+  } else if (style === 'cat-eye') {
+    const wx = s*w/2, ix = -s*w/2;
+    ctx.moveTo(ix, h/2);
+    ctx.quadraticCurveTo(0, h/2 + h*0.06, wx*0.9, h*0.32);
+    ctx.quadraticCurveTo(wx*1.2, h*0.05, wx*1.12, -h*0.5);
+    ctx.quadraticCurveTo(wx*0.45, -h*0.62, 0, -h*0.46);
+    ctx.quadraticCurveTo(ix*0.7, -h*0.4, ix, -h*0.06);
+    ctx.quadraticCurveTo(ix*1.04, h*0.18, ix, h/2);
+  } else if (style === 'aviador') {
+    ctx.moveTo(-s*w*0.42, -h/2);
+    ctx.quadraticCurveTo(0, -h*0.56, s*w/2, -h*0.4);
+    ctx.quadraticCurveTo(s*w*0.54, 0, s*w*0.26, h*0.46);
+    ctx.quadraticCurveTo(0, h*0.6, -s*w*0.05, h/2);
+    ctx.quadraticCurveTo(-s*w*0.42, h*0.36, -s*w*0.48, 0);
+    ctx.quadraticCurveTo(-s*w*0.5, -h*0.3, -s*w*0.42, -h/2);
+  } else { // rectangular
+    roundRectPath(-w/2, -h/2, w, h, h*0.28);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function roundRectPath(x, y, w, h, r){
+  r = Math.min(r, w/2, h/2);
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x,   y+h, r);
+  ctx.arcTo(x,   y+h, x,   y,   r);
+  ctx.arcTo(x,   y,   x+w, y,   r);
+}
+
+captureBtn.addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.download = 'visionfactory-probador.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+</script>
+</body>
+</html>
