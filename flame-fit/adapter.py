@@ -73,4 +73,11 @@ def _demo() -> None:
 
 
 if __name__ == "__main__":
-    _demo()
+    import sys
+    if len(sys.argv) > 1:
+        mesh = load_mesh(sys.argv[1])          # p.ej. salida de MICA: mesh.ply
+        print("vértices:", len(mesh.vertices))
+        print("medidas:", measurements_mm(mesh.vertices))
+        print("oclusor:", export_occluder(mesh, "occluder.obj"))
+    else:
+        _demo()
