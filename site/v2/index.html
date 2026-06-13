@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>VisionFactory — Probador de lentes 3D</title>
+<title>VisionFactory — Probador 3D · v2 (Face Landmarker)</title>
 <meta name="description" content="Probador de lentes 3D a medida con seguimiento facial — VisionFactory." />
 <style>
   :root { --bg:#0d0f14; --panel:#161a23; --line:#262c3a; --txt:#e7ecf5; --muted:#9aa6bd; --acc:#4f8cff; }
@@ -39,7 +39,7 @@
 <noscript><p style="padding:16px">Este probador necesita JavaScript activado.</p></noscript>
 <header>
   <h1>VisionFactory</h1>
-  <span class="tag">Probador 3D · ajuste a medida</span>
+  <span class="tag">Probador 3D · v2 · Face Landmarker</span>
 </header>
 
 <main>
@@ -66,6 +66,7 @@
     <label for="color">Color</label>
     <input type="color" id="color" value="#202024" />
     <button id="capture" disabled>Capturar PNG</button>
+    <label>Pose <select id="pose"><option value="landmarks">landmarks</option><option value="matrix">matriz</option></select></label>
     <label>Estabilidad <input type="range" id="stab" min="0" max="1" step="0.01" value="0.58"></label>
     <button id="copycfg">Copiar config</button>
     <button id="resetcfg">Reset</button>
@@ -104,11 +105,9 @@
 </main>
 
 <footer>
-  VisionFactory · <a href="v2/">probar v2 (Face Landmarker)</a> · <a href="https://github.com/contrerassma-eng/visionfactory" target="_blank" rel="noopener">repositorio</a>
+  VisionFactory · <a href="../">← volver a v1</a> · <a href="https://github.com/contrerassma-eng/visionfactory" target="_blank" rel="noopener">repositorio</a>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
@@ -225,9 +224,9 @@ function buildGlasses(style) {
 
 // ---- Modelos CAD importados (STL). Cada uno con su propia calibración. ----
 const CAD = {
-  assem1: { file: "models/sunglass.stl", label: "CAD: Assem1",
+  assem1: { file: "../models/sunglass.stl", label: "CAD: Assem1",
     cal: { scale: 1.26, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: -0.11, oz: -0.74, clip: 3 } },
-  sunglass2: { file: "models/sunglass2.stl", label: "CAD: Sunglass 2",
+  sunglass2: { file: "../models/sunglass2.stl", label: "CAD: Sunglass 2",
     cal: { scale: 1, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: 0, oz: 0, clip: 3 } },
 };
 const cadModel = new THREE.Group();
@@ -351,32 +350,56 @@ function resize(w, h) {
   camera.updateProjectionMatrix();
 }
 
-// ---------- MediaPipe ----------
-const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}` });
-faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-faceMesh.onResults(onResults);
+// ---------- MediaPipe Face Landmarker (Tasks) ----------
+let poseMode = "landmarks";
+document.getElementById("pose").addEventListener("change", (e) => { poseMode = e.target.value; });
 
-let cam = null;
+let faceLandmarker = null;
+try {
+  const { FaceLandmarker, FilesetResolver } = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10");
+  const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10/wasm");
+  faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
+    runningMode: "VIDEO", numFaces: 1, outputFacialTransformationMatrixes: true, outputFaceBlendshapes: false,
+  });
+} catch (e) {
+  setStatus("No se pudo cargar el tracker (Face Landmarker)", "warn");
+}
+
+let running = false, lastTs = -1;
 startBtn.addEventListener("click", async () => {
+  if (!faceLandmarker) { setStatus("Tracker no disponible", "warn"); return; }
   startBtn.disabled = true;
   setStatus("Iniciando cámara…", "warn");
   try {
-    cam = new Camera(video, { onFrame: async () => { await faceMesh.send({ image: video }); }, width: 1280, height: 720, facingMode: "user" });
-    await cam.start();
-    captureBtn.disabled = false;
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 1280, height: 720 } });
+    video.srcObject = stream; await video.play();
+    captureBtn.disabled = false; running = true;
     setStatus("Buscando rostro…", "warn");
+    loop();
   } catch (e) {
     setStatus("No se pudo acceder a la cámara", "warn");
     startBtn.disabled = false;
   }
 });
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2 && faceLandmarker) {
+    let ts = performance.now();
+    if (ts <= lastTs) ts = lastTs + 1;
+    lastTs = ts;
+    onResults(faceLandmarker.detectForVideo(video, ts));
+  }
+  requestAnimationFrame(loop);
+}
 
 const tmp = new THREE.Vector3();
 function P(lm, i) { return new THREE.Vector3(lm[i].x * W, (1 - lm[i].y) * H, -lm[i].z * W); }
 
-function onResults(results) {
-  resize(results.image.width, results.image.height);
-  const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
+function onResults(res) {
+  resize(video.videoWidth || 1280, video.videoHeight || 720);
+  const lm = res.faceLandmarks && res.faceLandmarks[0];
+  const mtx = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0] && res.facialTransformationMatrixes[0].data;
   if (lm) {
     const t = performance.now() / 1000;
     const ri = P(lm, IRIS_R.c), li = P(lm, IRIS_L.c);
@@ -386,7 +409,13 @@ function onResults(results) {
     let up = P(lm, 10).sub(P(lm, 152)).normalize();
     const fwd = new THREE.Vector3().crossVectors(right, up).normalize();
     up = new THREE.Vector3().crossVectors(fwd, right).normalize();
-    const qTarget = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fwd));
+    let qTarget;
+    if (poseMode === "matrix" && mtx) {
+      qTarget = new THREE.Quaternion();
+      new THREE.Matrix4().fromArray(mtx).decompose(new THREE.Vector3(), qTarget, new THREE.Vector3());
+    } else {
+      qTarget = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fwd));
+    }
 
     // --- suavizado adaptativo (Estabilidad) ---
     const mc = 3.0 - 2.4 * stability;
