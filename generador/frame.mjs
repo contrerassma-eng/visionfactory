@@ -23,7 +23,7 @@ globalThis.require = require;
 const ocModule = require("replicad-opencascadejs/src/replicad_single.js");
 const opencascade = ocModule.default ?? ocModule;
 
-async function initOpenCascade() {
+export async function initOpenCascade() {
   const wasmPath = require.resolve(
     "replicad-opencascadejs/src/replicad_single.wasm"
   );
@@ -32,7 +32,7 @@ async function initOpenCascade() {
 }
 
 // --- Parámetros en mm (vendrán de la medición facial) ---
-const params = {
+export const params = {
   pd: 62, // distancia pupilar -> separación entre centros de aro
   lensWidth: 50,
   lensHeight: 38,
@@ -53,7 +53,7 @@ function rim(p) {
   return outer.cut(inner).sketchOnPlane().extrude(p.frontDepth);
 }
 
-function buildFrame(p) {
+export function buildFrame(p) {
   const dx = p.pd / 2; // centro de cada aro a media DP del eje
   const rimR = rim(p).translate([dx, 0, 0]);
   const rimL = rim(p).translate([-dx, 0, 0]);
@@ -81,7 +81,10 @@ async function main() {
   console.log("OK -> frame.step y frame.stl generados");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Solo corre la demo si se ejecuta directamente (no al importarse).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

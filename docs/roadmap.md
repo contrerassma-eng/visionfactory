@@ -79,8 +79,9 @@ CAD formal. La viseladora **no** usa STEP: usa el contorno 2D del lente en forma
 - **Biblioteca de estilos propios**: 3–5 familias parametrizadas (redonda,
   rectangular, cat-eye, browline, aviador). Son *categorías de estilo* (no
   protegibles) con diseño propio, ajustadas por las medidas del cliente.
-- **POC funcional**: `generador/` genera una montura paramétrica y exporta STEP +
-  STL desde JavaScript (Node), probando el camino de extremo a extremo.
+- **POC funcional**: `generador/` lleva landmarks → medidas en mm (iris como
+  escala) → parámetros → **STEP + STL** desde JavaScript (Node). Camino de extremo
+  a extremo probado (`frame-desde-rostro.mjs`).
 
 ### 2.3 Fabricación
 
