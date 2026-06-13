@@ -3,19 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>VisionFactory — Probador de lentes</title>
-<meta name="description" content="Probador de lentes a medida con seguimiento facial — VisionFactory." />
+<title>VisionFactory — Probador de lentes 3D</title>
+<meta name="description" content="Probador de lentes 3D a medida con seguimiento facial — VisionFactory." />
 <style>
   :root { --bg:#0d0f14; --panel:#161a23; --line:#262c3a; --txt:#e7ecf5; --muted:#9aa6bd; --acc:#4f8cff; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--txt); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
   header { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
-  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
   header .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
   main { max-width:760px; margin:0 auto; padding:16px; }
   .stage { position:relative; width:100%; aspect-ratio:4/3; background:#000; border-radius:14px; overflow:hidden; border:1px solid var(--line); }
-  #output { width:100%; height:100%; display:block; }
-  #status { position:absolute; top:10px; left:10px; font-size:12px; background:rgba(0,0,0,.55); border:1px solid var(--line); border-radius:999px; padding:4px 10px; }
+  /* video y canvas 3D apilados y espejados juntos (efecto selfie) */
+  .mirror { position:absolute; inset:0; transform:scaleX(-1); }
+  #video, #gl { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #status { position:absolute; top:10px; left:10px; z-index:2; font-size:12px; background:rgba(0,0,0,.55); border:1px solid var(--line); border-radius:999px; padding:4px 10px; }
   #status.ok { color:#5ee29a; border-color:#1f5a3c; }
   #status.warn { color:#ffd166; }
   .controls { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; align-items:center; }
@@ -23,6 +25,7 @@
   button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
   button:disabled { opacity:.5; cursor:default; }
   label { font-size:13px; color:var(--muted); }
+  input[type=color]{ width:38px; height:38px; padding:2px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
   .measure { margin-top:16px; display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
   .card .v { font-size:22px; font-weight:700; }
@@ -36,13 +39,15 @@
 <noscript><p style="padding:16px">Este probador necesita JavaScript activado.</p></noscript>
 <header>
   <h1>VisionFactory</h1>
-  <span class="tag">Probador · ajuste a medida</span>
+  <span class="tag">Probador 3D · ajuste a medida</span>
 </header>
 
 <main>
   <div class="stage">
-    <video id="input" playsinline style="display:none"></video>
-    <canvas id="output"></canvas>
+    <div class="mirror">
+      <video id="video" playsinline></video>
+      <canvas id="gl"></canvas>
+    </div>
     <div id="status" class="warn">Pulsa «Activar cámara»</div>
   </div>
 
@@ -56,6 +61,8 @@
       <option value="cat-eye">Cat-eye</option>
       <option value="aviador">Aviador</option>
     </select>
+    <label for="color">Color</label>
+    <input type="color" id="color" value="#202024" />
     <button id="capture" disabled>Capturar PNG</button>
   </div>
 
@@ -66,9 +73,10 @@
   </div>
 
   <p class="note">
-    Las medidas se estiman con el iris como patrón (~11.7&nbsp;mm). Son una
-    aproximación desde una cámara 2D; para fabricar se validan en un fitting real.
-    El procesamiento es 100% en tu dispositivo: el video no se sube a ningún lado.
+    Monturas 3D originales, ancladas a la pose de la cabeza y escaladas por tu
+    distancia pupilar. Por ahora el tamaño del modelo es fijo (luego se parametriza
+    por las medidas). Las medidas usan el iris como patrón (~11.7&nbsp;mm): son
+    estimación desde una cámara 2D. Todo corre en tu dispositivo; el video no se sube.
   </p>
 </main>
 
@@ -78,165 +86,197 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js" crossorigin="anonymous"></script>
-<script>
-const video = document.getElementById('input');
-const canvas = document.getElementById('output');
-const ctx = canvas.getContext('2d');
-const statusEl = document.getElementById('status');
-const startBtn = document.getElementById('start');
-const captureBtn = document.getElementById('capture');
-const styleSel = document.getElementById('style');
-const HVID_MM = 11.7;
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from "three";
 
-// Índices MediaPipe FaceMesh (refine_landmarks).
-const IRIS_R = { c:468, ring:[469,470,471,472] };
-const IRIS_L = { c:473, ring:[474,475,476,477] };
+const video = document.getElementById("video");
+const glCanvas = document.getElementById("gl");
+const statusEl = document.getElementById("status");
+const startBtn = document.getElementById("start");
+const captureBtn = document.getElementById("capture");
+const styleSel = document.getElementById("style");
+const colorInp = document.getElementById("color");
+
+const HVID_MM = 11.7;
+const IRIS_R = { c: 468, ring: [469, 470, 471, 472] };
+const IRIS_L = { c: 473, ring: [474, 475, 476, 477] };
 const FACE_R = 234, FACE_L = 454;
 
-function setStatus(text, cls){ statusEl.textContent = text; statusEl.className = cls || ''; }
-const dist = (a,b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
+const setStatus = (t, c) => { statusEl.textContent = t; statusEl.className = c || ""; };
+const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-const faceMesh = new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}` });
-faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+// ---------- Three.js ----------
+let W = 640, H = 480;
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene();
+let camera = new THREE.OrthographicCamera(0, W, H, 0, 1, 5000);
+camera.position.z = 1000;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404050, 1.1));
+const dirA = new THREE.DirectionalLight(0xffffff, 1.5); dirA.position.set(0.4, 0.7, 1); scene.add(dirA);
+const dirB = new THREE.DirectionalLight(0x8899ff, 0.4); dirB.position.set(-0.5, -0.2, 0.6); scene.add(dirB);
+
+// Materiales
+const frameMat = new THREE.MeshPhysicalMaterial({ color: 0x202024, roughness: 0.35, metalness: 0.0, clearcoat: 0.7, clearcoatRoughness: 0.25, side: THREE.DoubleSide });
+const lensMat = new THREE.MeshPhysicalMaterial({ color: 0x9fb6cc, roughness: 0.05, metalness: 0, transmission: 0.85, transparent: true, opacity: 0.32, ior: 1.5, thickness: 0.3, side: THREE.DoubleSide });
+colorInp.addEventListener("input", () => frameMat.color.set(colorInp.value));
+
+// Dimensiones del modelo (unidades: separación entre centros de lente = 1)
+const HW = 0.40, HH = 0.30, RIM = 0.06, FRONT = 0.14, LENSTHK = 0.05, TEMPLE = 1.3;
+
+function roundedRect(s, hw, hh, r) {
+  r = Math.min(r, hw, hh);
+  s.moveTo(-hw + r, -hh);
+  s.lineTo(hw - r, -hh); s.quadraticCurveTo(hw, -hh, hw, -hh + r);
+  s.lineTo(hw, hh - r); s.quadraticCurveTo(hw, hh, hw - r, hh);
+  s.lineTo(-hw + r, hh); s.quadraticCurveTo(-hw, hh, -hw, hh - r);
+  s.lineTo(-hw, -hh + r); s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+}
+
+function apertureShape(style, hw, hh) {
+  const s = new THREE.Shape();
+  if (style === "redonda") { s.absellipse(0, 0, hh, hh, 0, Math.PI * 2, false, 0); }
+  else if (style === "ovalada") { s.absellipse(0, 0, hw, hh, 0, Math.PI * 2, false, 0); }
+  else if (style === "cat-eye") {
+    s.moveTo(-hw, -hh * 0.6);
+    s.quadraticCurveTo(-hw * 0.5, -hh, 0, -hh);
+    s.quadraticCurveTo(hw, -hh, hw, -hh * 0.2);
+    s.quadraticCurveTo(hw * 1.1, hh * 0.4, hw * 1.15, hh * 1.05);
+    s.quadraticCurveTo(hw * 0.4, hh, 0, hh * 0.85);
+    s.quadraticCurveTo(-hw * 0.7, hh * 0.7, -hw, hh * 0.3);
+    s.quadraticCurveTo(-hw * 1.05, -hh * 0.1, -hw, -hh * 0.6);
+  } else if (style === "aviador") {
+    s.moveTo(-hw * 0.85, hh);
+    s.quadraticCurveTo(0, hh * 1.05, hw, hh * 0.8);
+    s.quadraticCurveTo(hw * 1.05, 0, hw * 0.95, -hh * 0.15);
+    s.quadraticCurveTo(hw * 0.4, -hh * 1.05, -hw * 0.1, -hh);
+    s.quadraticCurveTo(-hw * 0.8, -hh * 0.6, -hw * 0.95, hh * 0.05);
+    s.quadraticCurveTo(-hw * 1.05, hh * 0.6, -hw * 0.85, hh);
+  } else {
+    roundedRect(s, hw, hh, Math.min(hh * 0.55, hw * 0.3));
+  }
+  return s;
+}
+
+function buildEye(style) {
+  const eye = new THREE.Group();
+  const outer = apertureShape(style, HW + RIM, HH + RIM);
+  outer.holes.push(apertureShape(style, HW, HH));
+  const rimGeo = new THREE.ExtrudeGeometry(outer, { depth: FRONT, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 1, curveSegments: 32 });
+  rimGeo.translate(0, 0, -FRONT / 2);
+  eye.add(new THREE.Mesh(rimGeo, frameMat));
+  const lensGeo = new THREE.ExtrudeGeometry(apertureShape(style, HW * 0.99, HH * 0.99), { depth: LENSTHK, bevelEnabled: false, curveSegments: 32 });
+  lensGeo.translate(0, 0, -LENSTHK / 2);
+  eye.add(new THREE.Mesh(lensGeo, lensMat));
+  return eye;
+}
+
+function buildGlasses(style) {
+  const g = new THREE.Group();
+  const right = buildEye(style); right.position.x = 0.5;
+  const left = buildEye(style); left.position.x = -0.5; left.scale.x = -1;
+  g.add(right, left);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(2 * (0.5 - HW) + 0.12, 0.06, FRONT * 0.9), frameMat);
+  bridge.position.set(0, HH * 0.45, 0); g.add(bridge);
+  const tGeo = new THREE.BoxGeometry(0.05, 0.07, TEMPLE);
+  const tr = new THREE.Mesh(tGeo, frameMat); tr.position.set(0.5 + HW + RIM * 0.5, HH * 0.55, -TEMPLE / 2 + FRONT * 0.2); g.add(tr);
+  const tl = new THREE.Mesh(tGeo, frameMat); tl.position.set(-(0.5 + HW + RIM * 0.5), HH * 0.55, -TEMPLE / 2 + FRONT * 0.2); g.add(tl);
+  return g;
+}
+
+const cache = {};
+function getGlasses(style) { return (cache[style] ||= buildGlasses(style)); }
+let glasses = getGlasses(styleSel.value);
+glasses.visible = false;
+scene.add(glasses);
+styleSel.addEventListener("change", () => {
+  scene.remove(glasses);
+  glasses = getGlasses(styleSel.value);
+  scene.add(glasses);
+});
+
+function resize(w, h) {
+  if (w === W && h === H && renderer.domElement.width) return;
+  W = w; H = h;
+  renderer.setSize(W, H, false);
+  camera.left = 0; camera.right = W; camera.top = H; camera.bottom = 0;
+  camera.updateProjectionMatrix();
+}
+
+// ---------- MediaPipe ----------
+const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}` });
+faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 faceMesh.onResults(onResults);
 
-let camera = null;
-startBtn.addEventListener('click', async () => {
+let cam = null;
+startBtn.addEventListener("click", async () => {
   startBtn.disabled = true;
-  setStatus('Iniciando cámara…', 'warn');
+  setStatus("Iniciando cámara…", "warn");
   try {
-    camera = new Camera(video, {
-      onFrame: async () => { await faceMesh.send({ image: video }); },
-      width: 640, height: 480, facingMode: 'user'
-    });
-    await camera.start();
+    cam = new Camera(video, { onFrame: async () => { await faceMesh.send({ image: video }); }, width: 640, height: 480, facingMode: "user" });
+    await cam.start();
     captureBtn.disabled = false;
-    setStatus('Buscando rostro…', 'warn');
+    setStatus("Buscando rostro…", "warn");
   } catch (e) {
-    setStatus('No se pudo acceder a la cámara', 'warn');
+    setStatus("No se pudo acceder a la cámara", "warn");
     startBtn.disabled = false;
   }
 });
 
-function onResults(results){
-  const w = results.image.width, h = results.image.height;
-  if (canvas.width !== w) { canvas.width = w; canvas.height = h; }
+const tmp = new THREE.Vector3();
+function P(lm, i) { return new THREE.Vector3(lm[i].x * W, (1 - lm[i].y) * H, -lm[i].z * W); }
 
-  ctx.save();
-  ctx.clearRect(0,0,w,h);
-  ctx.translate(w,0); ctx.scale(-1,1);          // efecto espejo (selfie)
-  ctx.drawImage(results.image, 0, 0, w, h);
-
+function onResults(results) {
+  resize(results.image.width, results.image.height);
   const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
   if (lm) {
-    drawGlasses(lm, w, h, styleSel.value);
-    ctx.restore();                              // medidas fuera del espejo
-    updateMeasurements(lm, w, h);
-    setStatus('Rostro detectado', 'ok');
+    const ri = P(lm, IRIS_R.c), li = P(lm, IRIS_L.c);
+    const center = ri.clone().add(li).multiplyScalar(0.5);
+    const ipd = ri.distanceTo(li);
+    const right = li.clone().sub(ri).normalize();
+    let up = P(lm, 10).sub(P(lm, 152)).normalize();
+    const fwd = tmp.crossVectors(right, up).normalize().clone();
+    up = new THREE.Vector3().crossVectors(fwd, right).normalize();
+    glasses.position.copy(center);
+    glasses.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fwd));
+    glasses.scale.setScalar(ipd);
+    glasses.visible = true;
+    updateMeasurements(lm);
+    setStatus("Rostro detectado", "ok");
   } else {
-    ctx.restore();
-    setStatus('Buscando rostro…', 'warn');
+    glasses.visible = false;
+    setStatus("Buscando rostro…", "warn");
   }
+  renderer.render(scene, camera);
 }
 
-function px(lm, i, w, h){ return [lm[i].x*w, lm[i].y*h]; }
-
-function irisDiameterPx(lm, iris, w, h){
-  const c = px(lm, iris.c, w, h);
-  const m = iris.ring.reduce((s,i)=>s+dist(c, px(lm,i,w,h)),0)/iris.ring.length;
-  return m*2;
+function px(lm, i) { return [lm[i].x * W, lm[i].y * H]; }
+function irisDia(lm, iris) {
+  const c = px(lm, iris.c);
+  const m = iris.ring.reduce((s, i) => s + dist2(c, px(lm, i)), 0) / iris.ring.length;
+  return m * 2;
+}
+function updateMeasurements(lm) {
+  const mmPerPx = HVID_MM / ((irisDia(lm, IRIS_R) + irisDia(lm, IRIS_L)) / 2);
+  const pd = dist2(px(lm, IRIS_R.c), px(lm, IRIS_L.c)) * mmPerPx;
+  const face = dist2(px(lm, FACE_R), px(lm, FACE_L)) * mmPerPx;
+  document.getElementById("pd").textContent = pd.toFixed(1) + " mm";
+  document.getElementById("face").textContent = face.toFixed(0) + " mm";
+  document.getElementById("lens").textContent = Math.round((face - 18) / 2 - 8) + " mm";
 }
 
-function updateMeasurements(lm, w, h){
-  const diaPx = (irisDiameterPx(lm,IRIS_R,w,h)+irisDiameterPx(lm,IRIS_L,w,h))/2;
-  const mmPerPx = HVID_MM/diaPx;
-  const pd = dist(px(lm,IRIS_R.c,w,h), px(lm,IRIS_L.c,w,h))*mmPerPx;
-  const face = dist(px(lm,FACE_R,w,h), px(lm,FACE_L,w,h))*mmPerPx;
-  const lens = (face - 18)/2 - 8;              // estimación de ancho de lente
-  document.getElementById('pd').textContent = pd.toFixed(1)+' mm';
-  document.getElementById('face').textContent = face.toFixed(0)+' mm';
-  document.getElementById('lens').textContent = Math.round(lens)+' mm';
-}
-
-function drawGlasses(lm, w, h, style){
-  const r = px(lm, IRIS_R.c, w, h);
-  const l = px(lm, IRIS_L.c, w, h);
-  const cx=(r[0]+l[0])/2, cy=(r[1]+l[1])/2;
-  const sep = dist(l, r);
-  const roll = Math.atan2(l[1]-r[1], l[0]-r[0]);
-  const lensW = sep*0.95, lensH = lensW*0.78;
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(roll);
-  ctx.lineWidth = Math.max(2.5, lensW*0.06);
-  ctx.strokeStyle = '#101216';
-  ctx.fillStyle = 'rgba(20,24,32,0.18)';
-
-  drawLens(-sep/2, lensW, lensH, style, -1);
-  drawLens( sep/2, lensW, lensH, style,  1);
-
-  // puente
-  ctx.beginPath();
-  ctx.moveTo(-sep/2 + lensW/2 - 1, -lensH*0.12);
-  ctx.quadraticCurveTo(0, -lensH*0.02, sep/2 - lensW/2 + 1, -lensH*0.12);
-  ctx.stroke();
-
-  // varillas
-  ctx.beginPath();
-  ctx.moveTo(-sep/2 - lensW/2, -lensH*0.1); ctx.lineTo(-sep/2 - lensW/2 - lensW*0.55, -lensH*0.22);
-  ctx.moveTo( sep/2 + lensW/2, -lensH*0.1); ctx.lineTo( sep/2 + lensW/2 + lensW*0.55, -lensH*0.22);
-  ctx.stroke();
-  ctx.restore();
-}
-
-// Dibuja una apertura de lente centrada en (x0,0). s = lado externo (+1 / -1).
-function drawLens(x0, w, h, style, s){
-  ctx.save();
-  ctx.translate(x0, 0);
-  ctx.beginPath();
-  if (style === 'redonda') {
-    ctx.ellipse(0, 0, h/2, h/2, 0, 0, Math.PI*2);
-  } else if (style === 'ovalada') {
-    ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
-  } else if (style === 'cat-eye') {
-    const wx = s*w/2, ix = -s*w/2;
-    ctx.moveTo(ix, h/2);
-    ctx.quadraticCurveTo(0, h/2 + h*0.06, wx*0.9, h*0.32);
-    ctx.quadraticCurveTo(wx*1.2, h*0.05, wx*1.12, -h*0.5);
-    ctx.quadraticCurveTo(wx*0.45, -h*0.62, 0, -h*0.46);
-    ctx.quadraticCurveTo(ix*0.7, -h*0.4, ix, -h*0.06);
-    ctx.quadraticCurveTo(ix*1.04, h*0.18, ix, h/2);
-  } else if (style === 'aviador') {
-    ctx.moveTo(-s*w*0.42, -h/2);
-    ctx.quadraticCurveTo(0, -h*0.56, s*w/2, -h*0.4);
-    ctx.quadraticCurveTo(s*w*0.54, 0, s*w*0.26, h*0.46);
-    ctx.quadraticCurveTo(0, h*0.6, -s*w*0.05, h/2);
-    ctx.quadraticCurveTo(-s*w*0.42, h*0.36, -s*w*0.48, 0);
-    ctx.quadraticCurveTo(-s*w*0.5, -h*0.3, -s*w*0.42, -h/2);
-  } else { // rectangular
-    roundRectPath(-w/2, -h/2, w, h, h*0.28);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
-function roundRectPath(x, y, w, h, r){
-  r = Math.min(r, w/2, h/2);
-  ctx.moveTo(x+r, y);
-  ctx.arcTo(x+w, y,   x+w, y+h, r);
-  ctx.arcTo(x+w, y+h, x,   y+h, r);
-  ctx.arcTo(x,   y+h, x,   y,   r);
-  ctx.arcTo(x,   y,   x+w, y,   r);
-}
-
-captureBtn.addEventListener('click', () => {
-  const a = document.createElement('a');
-  a.download = 'visionfactory-probador.png';
-  a.href = canvas.toDataURL('image/png');
-  a.click();
+captureBtn.addEventListener("click", () => {
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const x = c.getContext("2d");
+  x.translate(W, 0); x.scale(-1, 1);          // espejo, igual que en pantalla
+  x.drawImage(video, 0, 0, W, H);
+  x.drawImage(renderer.domElement, 0, 0, W, H);
+  const a = document.createElement("a"); a.download = "visionfactory-probador.png"; a.href = c.toDataURL("image/png"); a.click();
 });
 </script>
 </body>
