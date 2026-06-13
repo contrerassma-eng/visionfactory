@@ -65,6 +65,9 @@
     <label for="color">Color</label>
     <input type="color" id="color" value="#202024" />
     <button id="capture" disabled>Capturar PNG</button>
+    <label>Estabilidad <input type="range" id="stab" min="0" max="1" step="0.01" value="0.6"></label>
+    <button id="copycfg">Copiar config</button>
+    <button id="resetcfg">Reset</button>
   </div>
 
   <div id="cadpanel" style="display:none;margin-top:14px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px">
@@ -242,23 +245,65 @@ new STLLoader().load("models/sunglass.stl",
   }, undefined, () => setStatus("No se pudo cargar el modelo CAD", "warn"));
 
 const cadPanel = document.getElementById("cadpanel");
-const bindCal = (id, key) => {
-  const el = document.getElementById(id);
-  el.addEventListener("input", () => { cadCal[key] = parseFloat(el.value); applyCal(); });
-};
-["c_scale:scale", "c_sy:sy", "c_rx:rx", "c_ry:ry", "c_rz:rz", "c_ox:ox", "c_oy:oy", "c_oz:oz", "c_clip:clip"].forEach((p) => { const [id, k] = p.split(":"); bindCal(id, k); });
 
-// ---- Oclusor de cabeza (escribe profundidad, no color): oculta lo que pasa por
-// detrás de la cabeza, para que las varillas se metan tras la oreja en vez de
-// cruzar el rostro. Es la técnica que usan los probadores realistas. ----
+// ---- Oclusor de cabeza (depth-only): oculta lo que pasa por detrás de la cabeza,
+// para que las varillas se metan tras la oreja en vez de cruzar el rostro. ----
 const occluder = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.MeshBasicMaterial({ colorWrite: false }));
 occluder.renderOrder = -1;
 occluder.visible = false;
 scene.add(occluder);
 const occCal = { on: true, size: 1, dz: 0.7 };
-document.getElementById("c_occ").addEventListener("change", (e) => { occCal.on = e.target.checked; });
-document.getElementById("c_osz").addEventListener("input", (e) => { occCal.size = parseFloat(e.target.value); });
-document.getElementById("c_odz").addEventListener("input", (e) => { occCal.dz = parseFloat(e.target.value); });
+
+// ---- Estabilidad: filtro One Euro (anti-jitter) en posición/escala/giro ----
+class OneEuro {
+  constructor(mc = 1.5, beta = 0.003) { this.mc = mc; this.beta = beta; this.dc = 1.0; this.x = null; this.dx = 0; this.t = null; }
+  a(cut, dt) { const tau = 1 / (2 * Math.PI * cut); return 1 / (1 + tau / dt); }
+  filter(x, t) {
+    if (this.x === null) { this.x = x; this.t = t; return x; }
+    const dt = Math.max(1e-3, t - this.t); this.t = t;
+    const dx = (x - this.x) / dt; const ad = this.a(this.dc, dt);
+    this.dx = ad * dx + (1 - ad) * this.dx;
+    const al = this.a(this.mc + this.beta * Math.abs(this.dx), dt);
+    this.x = al * x + (1 - al) * this.x; return this.x;
+  }
+}
+const oePos = [new OneEuro(), new OneEuro(), new OneEuro()];
+const oeScale = new OneEuro(); const oeFace = new OneEuro();
+const qSmooth = new THREE.Quaternion(); let qInit = false;
+let stability = 0.6;
+
+// ---- Config: persistir y exportar la calibración ----
+const CTRL = [
+  ["c_scale", cadCal, "scale"], ["c_sy", cadCal, "sy"],
+  ["c_rx", cadCal, "rx"], ["c_ry", cadCal, "ry"], ["c_rz", cadCal, "rz"],
+  ["c_ox", cadCal, "ox"], ["c_oy", cadCal, "oy"], ["c_oz", cadCal, "oz"],
+  ["c_clip", cadCal, "clip"], ["c_osz", occCal, "size"], ["c_odz", occCal, "dz"],
+];
+const saveCfg = () => localStorage.setItem("vf_cfg", JSON.stringify({ cad: cadCal, occ: occCal, stab: stability }));
+function loadCfg() {
+  let c; try { c = JSON.parse(localStorage.getItem("vf_cfg")); } catch { c = null; }
+  if (!c) return;
+  Object.assign(cadCal, c.cad || {}); Object.assign(occCal, c.occ || {});
+  if (typeof c.stab === "number") stability = c.stab;
+}
+function reflect() {
+  for (const [id, obj, key] of CTRL) { const el = document.getElementById(id); if (el) el.value = obj[key]; }
+  document.getElementById("c_occ").checked = occCal.on;
+  document.getElementById("stab").value = stability;
+  applyCal();
+}
+for (const [id, obj, key] of CTRL) {
+  document.getElementById(id).addEventListener("input", (e) => { obj[key] = parseFloat(e.target.value); applyCal(); saveCfg(); });
+}
+document.getElementById("c_occ").addEventListener("change", (e) => { occCal.on = e.target.checked; saveCfg(); });
+document.getElementById("stab").addEventListener("input", (e) => { stability = parseFloat(e.target.value); saveCfg(); });
+document.getElementById("copycfg").addEventListener("click", async () => {
+  const txt = JSON.stringify({ cad: cadCal, occ: occCal, stab: stability });
+  try { await navigator.clipboard.writeText(txt); setStatus("Config copiada al portapapeles", "ok"); }
+  catch { setStatus(txt, "warn"); }
+});
+document.getElementById("resetcfg").addEventListener("click", () => { localStorage.removeItem("vf_cfg"); location.reload(); });
+loadCfg(); reflect();
 
 const cache = {};
 function getGlasses(style) {
@@ -312,24 +357,37 @@ function onResults(results) {
   resize(results.image.width, results.image.height);
   const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
   if (lm) {
+    const t = performance.now() / 1000;
     const ri = P(lm, IRIS_R.c), li = P(lm, IRIS_L.c);
     const center = ri.clone().add(li).multiplyScalar(0.5);
     const ipd = ri.distanceTo(li);
     const right = li.clone().sub(ri).normalize();
     let up = P(lm, 10).sub(P(lm, 152)).normalize();
-    const fwd = tmp.crossVectors(right, up).normalize().clone();
+    const fwd = new THREE.Vector3().crossVectors(right, up).normalize();
     up = new THREE.Vector3().crossVectors(fwd, right).normalize();
-    glasses.position.copy(center);
-    glasses.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fwd));
-    glasses.scale.setScalar(ipd);
+    const qTarget = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fwd));
+
+    // --- suavizado adaptativo (Estabilidad) ---
+    const mc = 3.0 - 2.4 * stability;
+    for (const f of oePos) f.mc = mc;
+    oeScale.mc = mc; oeFace.mc = mc;
+    const sCenter = new THREE.Vector3(
+      oePos[0].filter(center.x, t), oePos[1].filter(center.y, t), oePos[2].filter(center.z, t));
+    const sIpd = oeScale.filter(ipd, t);
+    if (!qInit) { qSmooth.copy(qTarget); qInit = true; }
+    const qa = Math.min(1, (0.5 - 0.38 * stability) + qSmooth.angleTo(qTarget) * 0.8);
+    qSmooth.slerp(qTarget, qa);
+    const sFwd = new THREE.Vector3(0, 0, 1).applyQuaternion(qSmooth);
+
+    glasses.position.copy(sCenter);
+    glasses.quaternion.copy(qSmooth);
+    glasses.scale.setScalar(sIpd);
     glasses.visible = true;
-    // recorta lo que queda detrás del frente (oculta varillas sobre el rostro)
-    clipPlane.setFromNormalAndCoplanarPoint(fwd, center.clone().addScaledVector(fwd, -cadCal.clip * ipd));
-    // oclusor de cabeza: elipsoide tras los ojos que tapa las varillas por detrás
-    const faceW = P(lm, FACE_R).distanceTo(P(lm, FACE_L));
+    clipPlane.setFromNormalAndCoplanarPoint(sFwd, sCenter.clone().addScaledVector(sFwd, -cadCal.clip * sIpd));
+    const faceW = oeFace.filter(P(lm, FACE_R).distanceTo(P(lm, FACE_L)), t);
     occluder.visible = occCal.on;
-    occluder.position.copy(center).addScaledVector(fwd, -occCal.dz * faceW);
-    occluder.quaternion.copy(glasses.quaternion);
+    occluder.position.copy(sCenter).addScaledVector(sFwd, -occCal.dz * faceW);
+    occluder.quaternion.copy(qSmooth);
     occluder.scale.set(faceW * 0.55 * occCal.size, faceW * 0.72 * occCal.size, faceW * 0.6 * occCal.size);
     updateMeasurements(lm);
     setStatus("Rostro detectado", "ok");
