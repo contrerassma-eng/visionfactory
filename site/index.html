@@ -55,7 +55,8 @@
     <button id="start" class="primary">Activar cámara</button>
     <label for="style">Modelo</label>
     <select id="style">
-      <option value="cad" selected>Mi modelo (CAD)</option>
+      <option value="cad:assem1" selected>CAD: Assem1</option>
+      <option value="cad:sunglass2">CAD: Sunglass 2</option>
       <option value="rectangular">Rectangular</option>
       <option value="redonda">Redonda</option>
       <option value="ovalada">Ovalada</option>
@@ -222,27 +223,39 @@ function buildGlasses(style) {
   return g;
 }
 
-// ---- Modelo CAD importado (STL convertido desde STEP) ----
+// ---- Modelos CAD importados (STL). Cada uno con su propia calibración. ----
+const CAD = {
+  assem1: { file: "models/sunglass.stl", label: "CAD: Assem1",
+    cal: { scale: 1.26, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: -0.11, oz: -0.74, clip: 3 } },
+  sunglass2: { file: "models/sunglass2.stl", label: "CAD: Sunglass 2",
+    cal: { scale: 1, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: 0, oz: 0, clip: 3 } },
+};
 const cadModel = new THREE.Group();
 const cadHolder = new THREE.Group();
 cadModel.add(cadHolder);
-let cadMesh = null, cadBaseScale = 1;
-const cadCal = { scale: 1.26, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: -0.11, oz: -0.74, clip: 3 };
+let cadMesh = null, cadBaseScale = 1, cadLoadedId = null;
+let activeCad = "assem1";
+let cadCal = CAD[activeCad].cal;   // referencia a la calibración del modelo activo
 function applyCal() {
   cadHolder.rotation.set(THREE.MathUtils.degToRad(cadCal.rx), THREE.MathUtils.degToRad(cadCal.ry), THREE.MathUtils.degToRad(cadCal.rz));
   const s = cadBaseScale * cadCal.scale;
   cadHolder.scale.set(s, s * cadCal.sy, s);
   cadHolder.position.set(cadCal.ox, cadCal.oy, cadCal.oz);
 }
-new STLLoader().load("models/sunglass.stl",
-  (g) => {
-    const geo = mergeVertices(g);     // suelda vértices -> sombreado suave (más nítido)
-    geo.computeVertexNormals();
-    geo.center(); geo.computeBoundingBox();
-    const sz = new THREE.Vector3(); geo.boundingBox.getSize(sz);
-    cadBaseScale = 2.0 / Math.max(sz.x, sz.y, sz.z);
-    cadMesh = new THREE.Mesh(geo, cadMat); cadHolder.add(cadMesh); applyCal();
-  }, undefined, () => setStatus("No se pudo cargar el modelo CAD", "warn"));
+function loadCad(id) {
+  if (cadLoadedId === id) return;
+  cadLoadedId = id;
+  if (cadMesh) { cadHolder.remove(cadMesh); cadMesh.geometry.dispose(); cadMesh = null; }
+  new STLLoader().load(CAD[id].file,
+    (g) => {
+      if (cadLoadedId !== id) return;          // cambió de modelo mientras cargaba
+      const geo = mergeVertices(g); geo.computeVertexNormals();
+      geo.center(); geo.computeBoundingBox();
+      const sz = new THREE.Vector3(); geo.boundingBox.getSize(sz);
+      cadBaseScale = 2.0 / Math.max(sz.x, sz.y, sz.z);
+      cadMesh = new THREE.Mesh(geo, cadMat); cadHolder.add(cadMesh); applyCal();
+    }, undefined, () => setStatus("No se pudo cargar el modelo CAD", "warn"));
+}
 
 const cadPanel = document.getElementById("cadpanel");
 
@@ -272,55 +285,63 @@ const oeScale = new OneEuro(); const oeFace = new OneEuro();
 const qSmooth = new THREE.Quaternion(); let qInit = false;
 let stability = 0.58;
 
-// ---- Config: persistir y exportar la calibración ----
-const CTRL = [
-  ["c_scale", cadCal, "scale"], ["c_sy", cadCal, "sy"],
-  ["c_rx", cadCal, "rx"], ["c_ry", cadCal, "ry"], ["c_rz", cadCal, "rz"],
-  ["c_ox", cadCal, "ox"], ["c_oy", cadCal, "oy"], ["c_oz", cadCal, "oz"],
-  ["c_clip", cadCal, "clip"], ["c_osz", occCal, "size"], ["c_odz", occCal, "dz"],
-];
-const saveCfg = () => localStorage.setItem("vf_cfg", JSON.stringify({ cad: cadCal, occ: occCal, stab: stability }));
+// ---- Config: persistir y exportar la calibración (por modelo) ----
+const CAD_KEYS = { c_scale: "scale", c_sy: "sy", c_rx: "rx", c_ry: "ry", c_rz: "rz", c_ox: "ox", c_oy: "oy", c_oz: "oz", c_clip: "clip" };
+const OCC_KEYS = { c_osz: "size", c_odz: "dz" };
+const saveCfg = () => localStorage.setItem("vf_cfg", JSON.stringify({
+  models: { assem1: CAD.assem1.cal, sunglass2: CAD.sunglass2.cal }, occ: occCal, stab: stability,
+}));
 function loadCfg() {
   let c; try { c = JSON.parse(localStorage.getItem("vf_cfg")); } catch { c = null; }
   if (!c) return;
-  Object.assign(cadCal, c.cad || {}); Object.assign(occCal, c.occ || {});
+  if (c.models) { for (const id in CAD) if (c.models[id]) Object.assign(CAD[id].cal, c.models[id]); }
+  else if (c.cad && typeof c.cad.scale === "number") Object.assign(CAD.assem1.cal, c.cad); // migra formato viejo
+  if (c.occ) Object.assign(occCal, c.occ);
   if (typeof c.stab === "number") stability = c.stab;
 }
 function reflect() {
-  for (const [id, obj, key] of CTRL) { const el = document.getElementById(id); if (el) el.value = obj[key]; }
+  for (const id in CAD_KEYS) { const el = document.getElementById(id); if (el) el.value = cadCal[CAD_KEYS[id]]; }
+  for (const id in OCC_KEYS) { const el = document.getElementById(id); if (el) el.value = occCal[OCC_KEYS[id]]; }
   document.getElementById("c_occ").checked = occCal.on;
   document.getElementById("stab").value = stability;
   applyCal();
 }
-for (const [id, obj, key] of CTRL) {
-  document.getElementById(id).addEventListener("input", (e) => { obj[key] = parseFloat(e.target.value); applyCal(); saveCfg(); });
+for (const id in CAD_KEYS) {
+  document.getElementById(id).addEventListener("input", (e) => { cadCal[CAD_KEYS[id]] = parseFloat(e.target.value); applyCal(); saveCfg(); });
+}
+for (const id in OCC_KEYS) {
+  document.getElementById(id).addEventListener("input", (e) => { occCal[OCC_KEYS[id]] = parseFloat(e.target.value); applyCal(); saveCfg(); });
 }
 document.getElementById("c_occ").addEventListener("change", (e) => { occCal.on = e.target.checked; saveCfg(); });
 document.getElementById("stab").addEventListener("input", (e) => { stability = parseFloat(e.target.value); saveCfg(); });
 document.getElementById("copycfg").addEventListener("click", async () => {
-  const txt = JSON.stringify({ cad: cadCal, occ: occCal, stab: stability });
-  try { await navigator.clipboard.writeText(txt); setStatus("Config copiada al portapapeles", "ok"); }
+  const txt = JSON.stringify({ model: activeCad, cad: cadCal, occ: occCal, stab: stability });
+  try { await navigator.clipboard.writeText(txt); setStatus("Config copiada (modelo: " + activeCad + ")", "ok"); }
   catch { setStatus(txt, "warn"); }
 });
 document.getElementById("resetcfg").addEventListener("click", () => { localStorage.removeItem("vf_cfg"); location.reload(); });
-loadCfg(); reflect();
+loadCfg();
 
 const cache = {};
-function getGlasses(style) {
-  if (style === "cad") return cadModel;
-  return (cache[style] ||= buildGlasses(style));
-}
-function syncPanel() { cadPanel.style.display = styleSel.value === "cad" ? "block" : "none"; }
-let glasses = getGlasses(styleSel.value);
-glasses.visible = false;
-scene.add(glasses);
-syncPanel();
-styleSel.addEventListener("change", () => {
+function selectStyle(v) {
   scene.remove(glasses);
-  glasses = getGlasses(styleSel.value);
+  if (v.startsWith("cad:")) {
+    activeCad = v.slice(4);
+    cadCal = CAD[activeCad].cal;     // apunta a la calibración del modelo elegido
+    loadCad(activeCad);
+    reflect();                        // refleja su calibración en los sliders
+    glasses = cadModel;
+  } else {
+    glasses = (cache[v] ||= buildGlasses(v));
+  }
+  glasses.visible = false;
   scene.add(glasses);
-  syncPanel();
-});
+  cadPanel.style.display = v.startsWith("cad:") ? "block" : "none";
+}
+let glasses = new THREE.Group();   // placeholder hasta seleccionar
+scene.add(glasses);
+selectStyle(styleSel.value);
+styleSel.addEventListener("change", () => selectStyle(styleSel.value));
 
 function resize(w, h) {
   if (w === W && h === H && renderer.domElement.width) return;
