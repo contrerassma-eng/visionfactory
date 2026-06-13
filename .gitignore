@@ -32,3 +32,4 @@ __pycache__/
 
 # Mallas de cabeza (dato biométrico, no versionar)
 *.ply
+*.obj
