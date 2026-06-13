@@ -65,7 +65,7 @@
     <label for="color">Color</label>
     <input type="color" id="color" value="#202024" />
     <button id="capture" disabled>Capturar PNG</button>
-    <label>Estabilidad <input type="range" id="stab" min="0" max="1" step="0.01" value="0.6"></label>
+    <label>Estabilidad <input type="range" id="stab" min="0" max="1" step="0.01" value="0.58"></label>
     <button id="copycfg">Copiar config</button>
     <button id="resetcfg">Reset</button>
   </div>
@@ -73,18 +73,18 @@
   <div id="cadpanel" style="display:none;margin-top:14px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px">
     <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Ajuste del modelo CAD (alinéalo a tu cara con estos controles)</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;font-size:12px">
-      <label>Escala <input type="range" id="c_scale" min="0.2" max="4" step="0.01" value="1"></label>
+      <label>Escala <input type="range" id="c_scale" min="0.2" max="4" step="0.01" value="1.26"></label>
       <label>Estiramiento V <input type="range" id="c_sy" min="0.5" max="2" step="0.01" value="1"></label>
       <label>Giro X <input type="range" id="c_rx" min="-180" max="180" step="1" value="0"></label>
       <label>Giro Y <input type="range" id="c_ry" min="-180" max="180" step="1" value="0"></label>
       <label>Giro Z <input type="range" id="c_rz" min="-180" max="180" step="1" value="0"></label>
       <label>Horizontal <input type="range" id="c_ox" min="-3" max="3" step="0.01" value="0"></label>
-      <label>Alto <input type="range" id="c_oy" min="-3" max="3" step="0.01" value="0"></label>
-      <label>Profundidad <input type="range" id="c_oz" min="-3" max="3" step="0.01" value="0"></label>
+      <label>Alto <input type="range" id="c_oy" min="-3" max="3" step="0.01" value="-0.11"></label>
+      <label>Profundidad <input type="range" id="c_oz" min="-3" max="3" step="0.01" value="-0.74"></label>
       <label>Varillas <input type="range" id="c_clip" min="0" max="3" step="0.01" value="3"></label>
       <label>Ocultar tras cabeza <input type="checkbox" id="c_occ" checked></label>
-      <label>Cabeza tamaño <input type="range" id="c_osz" min="0.5" max="2" step="0.01" value="1"></label>
-      <label>Cabeza prof. <input type="range" id="c_odz" min="0" max="1.5" step="0.01" value="0.7"></label>
+      <label>Cabeza tamaño <input type="range" id="c_osz" min="0.5" max="2" step="0.01" value="0.68"></label>
+      <label>Cabeza prof. <input type="range" id="c_odz" min="0" max="1.5" step="0.01" value="0.31"></label>
     </div>
   </div>
 
@@ -227,7 +227,7 @@ const cadModel = new THREE.Group();
 const cadHolder = new THREE.Group();
 cadModel.add(cadHolder);
 let cadMesh = null, cadBaseScale = 1;
-const cadCal = { scale: 1, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: 0, oz: 0, clip: 3 };
+const cadCal = { scale: 1.26, sy: 1, rx: 0, ry: 0, rz: 0, ox: 0, oy: -0.11, oz: -0.74, clip: 3 };
 function applyCal() {
   cadHolder.rotation.set(THREE.MathUtils.degToRad(cadCal.rx), THREE.MathUtils.degToRad(cadCal.ry), THREE.MathUtils.degToRad(cadCal.rz));
   const s = cadBaseScale * cadCal.scale;
@@ -252,7 +252,7 @@ const occluder = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 18), new THREE.M
 occluder.renderOrder = -1;
 occluder.visible = false;
 scene.add(occluder);
-const occCal = { on: true, size: 1, dz: 0.7 };
+const occCal = { on: true, size: 0.68, dz: 0.31 };
 
 // ---- Estabilidad: filtro One Euro (anti-jitter) en posición/escala/giro ----
 class OneEuro {
@@ -270,7 +270,7 @@ class OneEuro {
 const oePos = [new OneEuro(), new OneEuro(), new OneEuro()];
 const oeScale = new OneEuro(); const oeFace = new OneEuro();
 const qSmooth = new THREE.Quaternion(); let qInit = false;
-let stability = 0.6;
+let stability = 0.58;
 
 // ---- Config: persistir y exportar la calibración ----
 const CTRL = [
