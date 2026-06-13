@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/nice-noether-1m0f51]
     paths: ["site/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
