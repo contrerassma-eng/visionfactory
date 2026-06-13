@@ -6,9 +6,10 @@ orejas/varillas en el probador).
 
 | Endpoint | Qué hace | Estado |
 |---|---|---|
+| `GET /` + `POST /reconstruct` | Sube una **foto** → corre MICA → devuelve `mesh.ply` | ✅ Correr en el env MICA |
 | `POST /measure` | Landmarks (478) → medidas en mm (DP, ancho facial, puente, alto) | ✅ Sin licencia |
-| `POST /measure-mesh` | Sube malla FLAME (`.obj` de MICA) → medidas mm + dims de cabeza | ✅ Sin licencia (corre con `adapter.py`) |
-| `POST /fit` | Foto → FLAME directo | ⛔ Usar MICA offline (abajo) |
+| `POST /measure-mesh` | Sube malla FLAME (`.obj`/`.ply`) → medidas mm + dims de cabeza | ✅ Sin licencia |
+| `POST /fit` | (alias) usar `/reconstruct` | ⛔ |
 
 ## Correr el servicio
 
@@ -19,6 +20,27 @@ pip install -r requirements.txt
 uvicorn app:app --reload
 python adapter.py        # demo: corre el adapter con una malla sintética
 ```
+
+## Escáner web (foto → mesh.ply) ← lo pedido
+
+`/reconstruct` envuelve tu MICA. **Corre el servicio DENTRO del entorno MICA**
+(para que use su Python y dependencias):
+
+```bash
+conda activate MICA
+pip install fastapi uvicorn python-multipart     # una vez, en el env MICA
+export MICA_DIR=~/MICA
+cd ~/visionfactory/flame-fit                     # clona el repo si no lo tienes
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+Abre **http://localhost:8000/** → sube tu foto → descarga `mesh.ply`.
+
+- Personal/pruebas: así, en tu WSL (CPU, ~1 min/foto).
+- Producción/clientes: hospédalo en un **servidor con GPU** (Replicate, Modal,
+  RunPod, HuggingFace GPU Spaces, o una VM g4/g5) → rápido y escalable.
+
+⚠️ Un servicio público que procesa caras de clientes = uso **comercial** de
+FLAME/MICA (licencia) **y** datos biométricos (consentimiento, borrado, Ley 21.719).
 
 ## Pipeline FLAME recomendado (foto → cabeza 3D métrica)
 

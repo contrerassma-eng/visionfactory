@@ -10,14 +10,21 @@ Ejecutar:  uvicorn app:app --reload
 """
 from __future__ import annotations
 
+import glob
 import math
 import os
+import pathlib
+import subprocess
+import sys
 import tempfile
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="VisionFactory Fit", version="0.2.0")
+app = FastAPI(title="VisionFactory Fit", version="0.3.0")
+# Carpeta de MICA (para /reconstruct). Ejecuta uvicorn DENTRO del env MICA.
+MICA_DIR = os.environ.get("MICA_DIR", os.path.expanduser("~/MICA"))
 
 HVID_MM = 11.7  # diámetro horizontal del iris: patrón de escala poblacional
 
@@ -100,6 +107,46 @@ async def measure_mesh(file: UploadFile = File(...)):
         return measurements_mm(mesh.vertices)
     finally:
         os.unlink(path)
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    """Página simple: subir foto -> generar mesh.ply (corre MICA por detrás)."""
+    return """<!doctype html><meta charset=utf-8>
+<title>VisionFactory · Escáner 3D</title>
+<body style="font-family:sans-serif;max-width:560px;margin:40px auto">
+<h2>Escanear cara → cabeza 3D (MICA)</h2>
+<form method=post action=/reconstruct enctype=multipart/form-data>
+  <input type=file name=file accept="image/*" required>
+  <button>Generar mesh.ply</button>
+</form>
+<p style="color:#666">Foto frontal, buena luz, una sola cara. En CPU tarda ~1 min.</p>
+</body>"""
+
+
+@app.post("/reconstruct")
+async def reconstruct(file: UploadFile = File(...)):
+    """Sube una foto -> corre MICA -> devuelve mesh.ply (FLAME). Requiere ejecutar
+    el servicio en el entorno MICA y MICA_DIR apuntando a la carpeta de MICA."""
+    mica = pathlib.Path(MICA_DIR)
+    if not (mica / "demo.py").exists():
+        raise HTTPException(500, f"No encuentro MICA en {MICA_DIR}. Define la variable MICA_DIR.")
+    indir = mica / "demo" / "input"
+    outdir = mica / "demo" / "output"
+    indir.mkdir(parents=True, exist_ok=True)
+    for p in indir.glob("*"):
+        if p.is_file():
+            p.unlink()
+    suffix = pathlib.Path(file.filename or "face.jpg").suffix or ".jpg"
+    (indir / f"webface{suffix}").write_bytes(await file.read())
+
+    r = subprocess.run([sys.executable, "demo.py"], cwd=str(mica),
+                       capture_output=True, text=True)
+    meshes = sorted(glob.glob(str(outdir / "webface" / "*.ply")))
+    if not meshes:
+        log = (r.stderr or r.stdout or "")[-1500:]
+        raise HTTPException(500, f"MICA no generó malla.\n{log}")
+    return FileResponse(meshes[0], media_type="application/octet-stream", filename="mesh.ply")
 
 
 @app.post("/fit")
