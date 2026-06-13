@@ -66,6 +66,7 @@
     <label for="color">Color</label>
     <input type="color" id="color" value="#202024" />
     <button id="capture" disabled>Capturar PNG</button>
+    <button id="measure" disabled>Medir → JSON</button>
     <label>Pose <select id="pose"><option value="landmarks">landmarks</option><option value="matrix">matriz</option></select></label>
     <label>Estabilidad <input type="range" id="stab" min="0" max="1" step="0.01" value="0.58"></label>
     <button id="copycfg">Copiar config</button>
@@ -85,6 +86,7 @@
       <label>Profundidad <input type="range" id="c_oz" min="-3" max="3" step="0.01" value="-0.74"></label>
       <label>Varillas <input type="range" id="c_clip" min="0" max="3" step="0.01" value="3"></label>
       <label>Ocultar tras cabeza <input type="checkbox" id="c_occ" checked></label>
+      <label>Varillas a la oreja <input type="checkbox" id="c_temple" checked></label>
       <label>Cabeza tamaño <input type="range" id="c_osz" min="0.5" max="2" step="0.01" value="0.68"></label>
       <label>Cabeza prof. <input type="range" id="c_odz" min="0" max="1.5" step="0.01" value="0.31"></label>
     </div>
@@ -266,6 +268,31 @@ occluder.visible = false;
 scene.add(occluder);
 const occCal = { on: true, size: 0.68, dz: 0.31 };
 
+// ---- Varillas adaptativas: tubo del marco a la oreja (se ajusta a cada cabeza) ----
+const templeR = new THREE.Mesh(new THREE.BufferGeometry(), frameMat);
+const templeL = new THREE.Mesh(new THREE.BufferGeometry(), frameMat);
+templeR.visible = templeL.visible = false;
+scene.add(templeR, templeL);
+let templeOn = true;
+function buildTempleCurve(lm, side, rightV, upV, fwdV, ipd) {
+  const eyeIdx = side === "R" ? 33 : 263;       // canto externo del ojo (bisagra)
+  const earIdx = side === "R" ? 234 : 454;      // contorno facial junto a la oreja
+  const outward = rightV.clone().multiplyScalar(side === "R" ? -1 : 1);
+  const back = fwdV.clone().multiplyScalar(-1);
+  const hinge = P(lm, eyeIdx).addScaledVector(upV, ipd * 0.12);
+  const ear = P(lm, earIdx);
+  const mid = hinge.clone().add(ear).multiplyScalar(0.5).addScaledVector(outward, ipd * 0.12).addScaledVector(back, ipd * 0.08);
+  const earEnd = ear.clone().addScaledVector(back, ipd * 0.4).addScaledVector(upV, -ipd * 0.12);
+  return new THREE.CatmullRomCurve3([hinge, mid, ear, earEnd]);
+}
+function updateTemples(lm, rightV, upV, fwdV, ipd) {
+  for (const [mesh, side] of [[templeR, "R"], [templeL, "L"]]) {
+    mesh.geometry.dispose();
+    mesh.geometry = new THREE.TubeGeometry(buildTempleCurve(lm, side, rightV, upV, fwdV, ipd), 20, ipd * 0.045, 8, false);
+    mesh.visible = true;
+  }
+}
+
 // ---- Estabilidad: filtro One Euro (anti-jitter) en posición/escala/giro ----
 class OneEuro {
   constructor(mc = 1.5, beta = 0.003) { this.mc = mc; this.beta = beta; this.dc = 1.0; this.x = null; this.dx = 0; this.t = null; }
@@ -312,6 +339,7 @@ for (const id in OCC_KEYS) {
   document.getElementById(id).addEventListener("input", (e) => { occCal[OCC_KEYS[id]] = parseFloat(e.target.value); applyCal(); saveCfg(); });
 }
 document.getElementById("c_occ").addEventListener("change", (e) => { occCal.on = e.target.checked; saveCfg(); });
+document.getElementById("c_temple").addEventListener("change", (e) => { templeOn = e.target.checked; });
 document.getElementById("stab").addEventListener("input", (e) => { stability = parseFloat(e.target.value); saveCfg(); });
 document.getElementById("copycfg").addEventListener("click", async () => {
   const txt = JSON.stringify({ model: activeCad, cad: cadCal, occ: occCal, stab: stability });
@@ -374,7 +402,7 @@ startBtn.addEventListener("click", async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 1280, height: 720 } });
     video.srcObject = stream; await video.play();
-    captureBtn.disabled = false; running = true;
+    captureBtn.disabled = false; document.getElementById("measure").disabled = false; running = true;
     setStatus("Buscando rostro…", "warn");
     loop();
   } catch (e) {
@@ -433,17 +461,21 @@ function onResults(res) {
     glasses.quaternion.copy(qSmooth);
     glasses.scale.setScalar(sIpd);
     glasses.visible = true;
-    clipPlane.setFromNormalAndCoplanarPoint(sFwd, sCenter.clone().addScaledVector(sFwd, -cadCal.clip * sIpd));
+    const adaptive = templeOn && glasses === cadModel;
+    const effClip = adaptive ? 0.2 : cadCal.clip;   // con varilla adaptativa, oculta la rígida del CAD
+    clipPlane.setFromNormalAndCoplanarPoint(sFwd, sCenter.clone().addScaledVector(sFwd, -effClip * sIpd));
     const faceW = oeFace.filter(P(lm, FACE_R).distanceTo(P(lm, FACE_L)), t);
     occluder.visible = occCal.on;
     occluder.position.copy(sCenter).addScaledVector(sFwd, -occCal.dz * faceW);
     occluder.quaternion.copy(qSmooth);
     occluder.scale.set(faceW * 0.55 * occCal.size, faceW * 0.72 * occCal.size, faceW * 0.6 * occCal.size);
+    if (adaptive) updateTemples(lm, right, up, sFwd, ipd); else { templeR.visible = templeL.visible = false; }
     updateMeasurements(lm);
     setStatus("Rostro detectado", "ok");
   } else {
     glasses.visible = false;
     occluder.visible = false;
+    templeR.visible = templeL.visible = false;
     setStatus("Buscando rostro…", "warn");
   }
   renderer.render(scene, camera);
@@ -455,13 +487,29 @@ function irisDia(lm, iris) {
   const m = iris.ring.reduce((s, i) => s + dist2(c, px(lm, i)), 0) / iris.ring.length;
   return m * 2;
 }
-function updateMeasurements(lm) {
+// Conjunto de medidas en mm desde los landmarks (iris como patrón de escala).
+function measureSet(lm) {
   const mmPerPx = HVID_MM / ((irisDia(lm, IRIS_R) + irisDia(lm, IRIS_L)) / 2);
-  const pd = dist2(px(lm, IRIS_R.c), px(lm, IRIS_L.c)) * mmPerPx;
-  const face = dist2(px(lm, FACE_R), px(lm, FACE_L)) * mmPerPx;
-  document.getElementById("pd").textContent = pd.toFixed(1) + " mm";
-  document.getElementById("face").textContent = face.toFixed(0) + " mm";
-  document.getElementById("lens").textContent = Math.round((face - 18) / 2 - 8) + " mm";
+  const D = (a, b) => dist2(px(lm, a), px(lm, b)) * mmPerPx;
+  const midX = px(lm, 168)[0];                       // línea media (entrecejo)
+  return {
+    dp_mm: +D(IRIS_R.c, IRIS_L.c).toFixed(1),
+    dp_mono_der_mm: +(Math.abs(px(lm, IRIS_R.c)[0] - midX) * mmPerPx).toFixed(1),
+    dp_mono_izq_mm: +(Math.abs(px(lm, IRIS_L.c)[0] - midX) * mmPerPx).toFixed(1),
+    ancho_facial_mm: +D(FACE_R, FACE_L).toFixed(1),
+    puente_mm: +D(133, 362).toFixed(1),               // inter-cantal interno (proxy DBL)
+    ancho_ojo_mm: +(((dist2(px(lm, 33), px(lm, 133)) + dist2(px(lm, 263), px(lm, 362))) / 2) * mmPerPx).toFixed(1),
+    alto_cara_mm: +D(10, 152).toFixed(1),             // frente-mentón
+    lente_sugerido_mm: Math.round((D(FACE_R, FACE_L) - 18) / 2 - 8),
+  };
+}
+function updateMeasurements(lm) {
+  const m = measureSet(lm);
+  lastMeas = m;
+  document.getElementById("pd").textContent = m.dp_mm + " mm";
+  document.getElementById("face").textContent = Math.round(m.ancho_facial_mm) + " mm";
+  document.getElementById("lens").textContent = m.lente_sugerido_mm + " mm";
+  if (capturing > 0) { capAcc.push(m); if (--capturing === 0) finishCapture(); }
 }
 
 captureBtn.addEventListener("click", () => {
@@ -472,6 +520,26 @@ captureBtn.addEventListener("click", () => {
   x.drawImage(renderer.domElement, 0, 0, W, H);
   const a = document.createElement("a"); a.download = "visionfactory-probador.png"; a.href = c.toDataURL("image/png"); a.click();
 });
+
+// ---- Medición: promedia ~60 cuadros y exporta JSON (datos para hacer a medida) ----
+let lastMeas = null, capturing = 0; const capAcc = [];
+const measureBtn = document.getElementById("measure");
+measureBtn.addEventListener("click", () => {
+  capAcc.length = 0; capturing = 60; measureBtn.disabled = true;
+  setStatus("Midiendo… mira de frente y quieto", "warn");
+});
+function finishCapture() {
+  const keys = Object.keys(capAcc[0]);
+  const avg = {};
+  for (const k of keys) avg[k] = +(capAcc.reduce((s, o) => s + o[k], 0) / capAcc.length).toFixed(1);
+  const out = { fecha: new Date().toISOString(), modelo: activeCad, muestras: capAcc.length, medidas_mm: avg };
+  const txt = JSON.stringify(out, null, 2);
+  const a = document.createElement("a"); a.download = "visionfactory-medidas.json";
+  a.href = "data:application/json," + encodeURIComponent(txt); a.click();
+  navigator.clipboard?.writeText(txt).catch(() => {});
+  measureBtn.disabled = false;
+  setStatus("Medidas exportadas (JSON descargado)", "ok");
+}
 </script>
 </body>
 </html>

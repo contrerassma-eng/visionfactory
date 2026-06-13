@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+numpy>=1.26
+
+# --- Opcional, solo para /fit con FLAME (licencia NO comercial; ver README) ---
+# torch
+# trimesh
+# Los pesos de FLAME y los regresores (MICA / DECA / EMOCA) requieren registro
+# y aceptar la licencia de investigación en https://flame.is.tue.mpg.de
